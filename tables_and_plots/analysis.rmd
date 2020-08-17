@@ -1,0 +1,706 @@
+---
+title: 'Analysis of qrels'
+geometry: margin=.75in
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+header-includes:
+- \usepackage{graphicx}
+- \usepackage{color}
+graphics: yes
+fontsize: 14pt
+---
+
+```{r}
+qrels <- read.csv('qrels_correctness.txt', sep=' ', header=F)
+colnames(qrels) <- c('TID','QID','DOCID','REL','COR','CRE')
+
+qrels_raw <- read.csv('qrels_raw.txt', sep=' ', header=F)
+colnames(qrels_raw) <- c('TID','QID','DOCID','REL','EFF','CRE')
+
+teff <- read.csv('topics_efficacy', sep=' ', header=F)
+colnames(teff) <- c('TID','TEFF')
+
+qrels_raw <- merge(qrels_raw, teff)
+head(qrels)
+
+topics <- read.csv('../topics.csv')[,-2]
+colnames(topics) <- c('TID','query')
+```
+
+
+```{r}
+library('tidyverse')
+
+qrels <- subset(qrels, REL > 0 & COR >=0 & CRE >= 0) 
+
+qrels$REL <- as.factor(qrels$REL)
+qrels$COR <- as.factor(qrels$COR)
+qrels$CRE <- as.factor(qrels$CRE)
+head(qrels)
+
+
+qrels_raw <- subset(qrels_raw, REL > 0 & EFF >0 & CRE >= 0) 
+
+qrels_raw$REL  <- as.factor(qrels_raw$REL)
+qrels_raw$EFF  <- as.factor(qrels_raw$EFF)
+qrels_raw$CRE  <- as.factor(qrels_raw$CRE)
+qrels_raw$TEFF <- as.factor(qrels_raw$TEFF)
+head(qrels_raw)
+
+```
+
+```{r}
+temp <- qrels_raw %>% group_by(TEFF,TID,CRE, EFF) %>% summarise(n=n()) %>% spread(EFF, n) %>% replace_na(list('1'=0,'2'=0,'3'=0))
+
+guess <- function(dst){
+  guess  <- sapply(1:nrow(dst), function(i) which(max(dst[i,]) == dst[i,]))
+  guess <- sapply(guess, function(g) g[1])
+  consen <- unlist(sapply(1:nrow(dst), function(i) dst[i,guess[i]]/sum(dst[i , ])))
+  out <- cbind(guess, round(consen,2))
+  colnames(out) <- c('Guess', 'Consensus')
+  rownames(out) <- NULL
+  out[,1] <- out[,1] 
+  out
+}
+
+temp <- data.frame(temp,guess(temp[,4:6]))
+temp$Guess <- temp$Guess -2
+
+temp <- merge(temp,topics) %>% subset(CRE==1) %>% arrange(TEFF) %>% select(1,3:6,2,7:9)
+
+write.csv(temp, 'guess.csv')
+```
+
+
+```{r}
+library('gridExtra')
+qrels$CRE <- factor(qrels$CRE, levels=c(0,1))
+
+g1 <- ggplot(qrels) + 
+  geom_bar(aes(x=stat(count), y = COR, fill = CRE ), alpha=.9, position = 'fill') +
+  labs(y = 'Correctness', x = 'Proportion of relevant documents') + 
+  theme_linedraw() + 
+  ggtitle('Credibility and Correctness of Relevant Documents') +
+  scale_y_discrete(labels= c('Incorrect','Correct'), name='') +
+  scale_fill_grey(name ='', labels=c('Noncredible','Credible'))
+
+g2 <- ggplot(qrels) + 
+  geom_bar(aes(x=stat(count), y = COR,fill = CRE ), alpha=.9) +
+  labs(y = 'Correctness', x = 'Count among relevant documents') +
+  theme_linedraw() +
+  scale_y_discrete(labels= c('Incorrect','Correct'), name='') +
+  scale_fill_grey(name ='', labels=c('Noncredible','Credible'))
+
+grid.arrange(g1,g2,ncol=1)
+
+png('~/Documents/UWaterlooThesis/adds/cred_cor.png')
+grid.arrange(g1,g2,ncol=1)
+dev.off()
+```
+
+```{r}
+library('viridis')
+ggplot(qrels_raw) + 
+  geom_bar(aes(y=stat(count), x = EFF, fill = CRE ), alpha=.8) +
+  theme_minimal() + 
+  labs(x='Document Efficacy Claim',title = '# of Documents w.r.t Document Efficacy Claim' ) + 
+  scale_x_discrete(labels= c('Unhelpful','Inconclusive','Helpful')) + 
+  scale_fill_grey(name ='', labels=c('Non-credible','Credible')) 
+```
+
+```{r}
+pcases <- group_by(qrels_raw, TEFF) %>% summarise(ncases = n(), pcases = n()/nrow(qrels_raw))
+g <- ggplot(count(qrels_raw, TEFF), aes(y=n, x = "", fill = TEFF)) + 
+  geom_bar(alpha=.6, width=1, stat = 'identity') +
+  theme_void() + 
+  labs(y='',x='') +
+  scale_fill_grey(name='', labels= c('Unhelpful','Inconclusive','Helpful')) +
+  theme(axis.text.x = element_blank()) +
+  geom_text(aes(y=c(3500,2200,800), x=c(1,1.1,1.1),label=paste0(round(pcases$pcases*100,1), ' %')), size=5) + 
+  coord_polar("y", start=0) +
+  # geom_text(aes(y=c(100,3500,2000)[rank(cumsum(n))], x=c(1,1.4,1)[rank(cumsum(n))],label = paste0(round(n/nrow(qrels)*100,1), '%')), size=5) + 
+  labs(title = 'Ideal Distribution of Documents by Efficacy Claim', subtitle = 'Adjusted by # of Docs per topic') +
+  theme(text = element_text(size=16))
+
+g
+
+png('~/Documents/UWaterlooThesis/adds/evendist.png')
+g
+dev.off()
+```
+
+```{r}
+
+g <- group_by(qrels_raw, EFF) %>% summarise(ncases = n(), pcases = n()/nrow(qrels_raw)) %>% 
+ggplot(aes(y=ncases, x = "", fill = EFF)) + 
+  geom_bar(alpha=.6, width=1, stat = 'identity') +
+  theme_void() + 
+  labs(y='',x='') +
+  scale_fill_grey(name='', labels= c('Unhelpful','Inconclusive','Helpful')) +
+  theme(axis.text.x = element_blank()) +
+  coord_polar("y", start=0) +
+  geom_text(aes(y=c(4000,3500,2000)[rank(cumsum(ncases))], x=c(1.6,1.4,1)[rank(cumsum(ncases))],label = paste0(round(pcases*100,1), '%')), size=5) + 
+  labs(title='Distribution of Documents by Document Efficacy Claim', subtitle=' ') + 
+  theme(text = element_text(size=16))
+
+g
+
+png('~/Documents/UWaterlooThesis/adds/peff_dist.png')
+g
+dev.off()
+```
+```{r}
+library('treemapify')
+crecor <- count(qrels, COR, CRE) 
+crecor$COR <- c('Incorrect','Correct')[as.numeric(crecor$COR)]
+crecor$CRE <- c('Noncredible','Credible')[as.numeric(crecor$CRE)]
+
+crecor$n[2] <- crecor$n[2] + 0.01
+
+g <- ggplot(crecor, aes(area=n, fill = COR,subgroup=COR, label = paste0(CRE, '\n', round(n/nrow(qrels) * 100,1), ' %'))) + 
+  geom_treemap(colour = 'white', size=2,start = 'topright') +
+    scale_fill_grey(end =.7,name ='') + 
+  geom_treemap_subgroup_text(place = 'topleft', colour='white', start = 'topright') + 
+  geom_treemap_text(place = "centre", grow = F, colour =
+                             "white", fontface = "bold", size = 14,start = 'topright') +
+  ggtitle('Distribution of Documents by Correctness & Credibility') +
+  theme(text = element_text(size=16))
+  # geom_treemap_text(colour = "white", place = "topleft", reflow =  T)
+
+g
+
+png('~/Documents/UWaterlooThesis/adds/treemap.png')
+g
+dev.off()
+
+```
+
+```{r}
+qrels <- merge(qrels, teff)
+
+corDist <- subset(qrels, CRE %in% c(0,1) & COR %in% c(0,1)) %>%  group_by(CRE) %>% summarize(ndocs = n(), pdocs=paste0(round(sum(as.numeric(as.character(COR)))/n()*100,1),' %'),) 
+
+overall <- subset(qrels, CRE %in% c(0,1) & COR %in% c(0,1)) %>% summarise(ndocs = n(), pdocs = paste0(round(sum(as.numeric(as.character(COR)))/n()*100,1),' %'),) 
+corDist <- rbind(corDist, c('Collection', as.matrix(overall)))
+
+cor.by.cred <- subset(qrels, CRE %in% c(0,1) & COR %in% c(0,1)) %>%  group_by(CRE, TEFF) %>% summarize( pdocs=paste0(round(sum(as.numeric(as.character(COR)))/n()*100,1),' %'),)  %>% spread(CRE,pdocs) %>% select(c('1','0'))
+
+temp <- subset(qrels, CRE %in% c(0,1) & COR %in% c(0,1)) %>%  group_by(TEFF) %>% summarize( pdocs=paste0(round(sum(as.numeric(as.character(COR)))/n()*100,1),' %'),) 
+
+corDist <- rbind(cbind(data.frame(temp), cor.by.cred), c(NA,rev(corDist$pdocs)))
+
+xtable(corDist)
+
+```
+
+```{r}
+corCounts <- group_by(qrels, TID, COR) %>% summarise(ncor = n()) %>% subset(COR==1)
+tids <- corCounts %>% subset(ncor>0)
+tids <- tids$TID
+tids
+
+
+corDist <- subset(qrels, CRE %in% c(0,1) & COR %in% c(0,1) & TID %in% tids) %>%  group_by(CRE) %>% summarize(ndocs = n(), pdocs=paste0(round(sum(as.numeric(as.character(COR)))/n()*100,1),' %'),) 
+
+overall <- subset(qrels, CRE %in% c(0,1) & COR %in% c(0,1) & TID %in% tids) %>% summarise(ndocs = n(), pdocs = paste0(round(sum(as.numeric(as.character(COR)))/n()*100,1),' %'),) 
+corDist <- rbind(corDist, c('Collection', as.matrix(overall)))
+
+cor.by.cred <- subset(qrels, CRE %in% c(0,1) & COR %in% c(0,1) & TID %in% tids) %>%  group_by(CRE, TEFF) %>% summarize( pdocs=paste0(round(sum(as.numeric(as.character(COR)))/n()*100,1),' %'),)  %>% spread(CRE,pdocs) %>% select(c('1','0'))
+
+temp <- subset(qrels, CRE %in% c(0,1) & COR %in% c(0,1) & TID %in% tids) %>%  group_by(TEFF) %>% summarize( pdocs=paste0(round(sum(as.numeric(as.character(COR)))/n()*100,1),' %'),) 
+
+corDist <- rbind(cbind(data.frame(temp), cor.by.cred), c(NA,rev(corDist$pdocs)))
+
+xtable(corDist)
+
+```
+
+```{r}
+corCounts <- group_by(qrels, TID, COR) %>% summarise(ncor = n()) %>% subset(COR==1)
+tids <- corCounts %>% subset(ncor>0)
+tids <- tids$TID
+tids
+
+temp <- subset(qrels_raw, EFF %in% c(1,2,3) & CRE %in% c(0,1) & TID %in% tids) %>% group_by(CRE, TEFF, EFF) %>% summarise(ncases=n()) %>% spread(TEFF,ncases)
+
+creds   <- subset(temp,CRE==1)[,-1]
+creds$Overall <- apply(creds[,-1],1,sum) 
+creds <- apply(creds[,-1],2, function(ser) c( paste0(round(ser/sum(ser)*100,1),'%'),sum(ser)))
+colnames(creds) <- rownames(creds) <- c('Unhelpful','Inconclusive','Helpful','Overall')
+
+ncreds   <- subset(temp,CRE==0)[,-1]
+ncreds$Overall <- apply(ncreds[,-1],1,sum) 
+ncreds <- apply(ncreds[,-1],2, function(ser) c( paste0(round(ser/sum(ser)*100,1),'%'),sum(ser)))
+colnames(ncreds) <- rownames(ncreds) <- c('Unhelpful','Inconclusive','Helpful','Overall')
+
+overall <- subset(qrels_raw, EFF %in% c(1,2,3) & CRE %in% c(0,1) & TID %in% tids) %>% group_by(TEFF, EFF) %>% summarise(ncases=n()) %>% spread(TEFF,ncases)
+
+overall$Overall <- apply(overall[,-1],1,sum) 
+overall <- apply(overall[,-1],2, function(ser) c( paste0(round(ser/sum(ser)*100,1),'%'),sum(ser)))
+colnames(overall) <- rownames(overall) <- c('Unhelpful','Inconclusive','Helpful','Overall')
+
+```
+
+
+## TREC EVAL
+```{r}
+cor <- readxl::read_excel('../overall_results.xlsx','cor')
+cre <- readxl::read_excel('../overall_results.xlsx','cre')
+rel <- readxl::read_excel('../overall_results.xlsx','rel')
+all <- readxl::read_excel('../overall_results.xlsx','all')
+
+
+cor.k <- readxl::read_excel('../overall_results.xlsx','cor_10fold')
+cre.k <- readxl::read_excel('../overall_results.xlsx','cre_10fold')
+rel.k <- readxl::read_excel('../overall_results.xlsx','rel_10fold')
+all.k <- readxl::read_excel('../overall_results.xlsx','all_10fold')
+```
+
+```{r}
+corCounts <- group_by(qrels, TID, TEFF, COR) %>% summarise(ncor = n()) %>% subset(COR==1)
+tids <- corCounts %>% subset(ncor>=10)
+tids <- tids$TID
+tids
+```
+
+```{r}
+library('xtable')
+# imprMat <- imprs
+# score   <- map
+put_stars <- function(pval) matrix(Reduce(paste0, lapply(c(.01,.05,.1), function(p) c(ifelse((pval <= p),'*','') ))), nrow(pval))
+
+printer <- function(score, imprMat, pvals){
+  pvals <- put_stars(pvals)
+  imprMat[imprMat>0] <- paste0('+',imprMat[imprMat>0])
+  res <- sapply(1:ncol(score), function(i) paste0(round(score[,i],3), pvals[,i], ' (' ,imprMat[,i], '%)'))
+  res[nrow(res),] <- round(score[nrow(score),],3)
+  res <- cbind(paste0(c(rep('UWatMDS_',nrow(res)-1), 'UwaterMDS_'), rownames(score)), res)
+  colnames(res) <- c('Run', colnames(score))
+  rownames(res) <- c()
+  res
+}
+
+calc_pval <- function(dat) {apply(dat,2, function(ser) t.test(x = ser, y = dat$BM25, paired = T)$p.value)}
+
+```
+
+```{r}
+map <- sapply(list(rel,cor,cre,all), function(d) d %>% subset(TID %in% tids & MEASURE == 'map') %>% select(-c(1:3)) %>% apply(2,mean))
+colnames(map) <- c('Relevance','Correctness','Credibility','All')
+map <- map[c(3,2,4:7,1),]
+map
+
+imprs <- round ( apply(map, 2, function(x) x[-length(x)] / x[length(x)] - 1) * 100, 2 )
+
+```
+
+```{r}
+pvals <- sapply(list(rel,cor,cre,all), function(d) d %>% subset(TID %in% tids & MEASURE == 'map') %>% select(-c(1:3)) %>% calc_pval)
+
+colnames(pvals) <- c('Relevance','Correctness','Credibility','All')
+pvals <- round(pvals[c(3,2,4:7,1),],3)
+pvals
+
+# sink('~/Documents/UWaterlooThesis/clean_topics_map.tex')
+print(xtable(printer(map, imprs, pvals)), include.rownames=F)
+# sink()
+```
+
+```{r}
+ndcg <- sapply(list(rel,cor,cre,all), function(d) d %>% subset(TID %in% tids & MEASURE == 'ndcg_cut_10') %>% select(-c(1:3)) %>% apply(2,mean))
+
+colnames(ndcg) <- c('Relevance','Correctness','Credibility','All')
+ndcg <- ndcg[c(3,2,4:7,1),]
+ndcg
+
+imprs <- round ( apply(ndcg, 2, function(x) x[-length(x)] / x[length(x)] - 1) * 100, 2 )
+```
+
+```{r}
+
+pvals <- sapply(list(rel,cor,cre,all), function(d) d %>% subset(TID %in% tids & MEASURE == 'ndcg_cut_10') %>% select(-c(1:3)) %>% calc_pval)
+
+colnames(pvals) <- c('Relevance','Correctness','Credibility','All')
+pvals <- round(pvals[c(3,2,4:7,1),],3)
+pvals
+
+# sink('~/Documents/UWaterlooThesis/clean_topics_ndcg.tex')
+print(xtable(printer(ndcg, imprs, pvals)), include.rownames=F)
+# sink()
+```
+
+
+## Validation Results
+```{r}
+library('xtable')
+# imprMat <- imprs
+# score   <- map
+put_stars <- function(pval) matrix(Reduce(paste0, lapply(c(.01,.05,.1), function(p) c(ifelse((pval <= p),'*','') ))), nrow(pval))
+
+printer <- function(score, imprMat, pvals){
+  pvals <- put_stars(pvals)
+  imprMat[imprMat>0] <- paste0('+',imprMat[imprMat>0])
+  res <- sapply(1:ncol(score), function(i) paste0(round(score[,i],3), pvals[,i], ' (' ,imprMat[,i], '%)'))
+  res[nrow(res),] <- round(score[nrow(score),],3)
+  res <- cbind(paste0(c(rep('UWatMDS_',nrow(res)-1), 'UwaterMDS_'), rownames(score)), res)
+  colnames(res) <- c('Run', colnames(score))
+  rownames(res) <- c()
+  res
+}
+
+calc_pval <- function(dat) {apply(dat,2, function(ser) t.test(x = ser, y = dat$bm25, paired = T)$p.value)}
+
+```
+
+
+```{r}
+map.k <- sapply(list(rel.k,cor.k,cre.k,all.k), function(d) d %>% subset(TID %in% tids & MEASURE == 'map') %>% select(-c(1:2)) %>% apply(2,mean))
+colnames(map.k) <- c('Relevance','Correctness','Credibility','All')
+map.k <- map.k[c(2,4:7,3,1),]
+map.k
+
+imprs <- round ( apply(map.k, 2, function(x) x[-length(x)] / x[length(x)] - 1) * 100, 2 )
+```
+
+```{r}
+pvals <- sapply(list(rel.k,cor.k,cre.k,all.k), function(d) d %>% subset(TID %in% tids & MEASURE == 'map') %>% select(-c(1:2)) %>% calc_pval)
+
+colnames(pvals) <- c('Relevance','Correctness','Credibility','All')
+pvals <- round(pvals[c(2,4:7,3,1),],2)
+pvals
+
+sink('~/Documents/UWaterlooThesis/clean_topics_map_kfold.tex')
+print(xtable(printer(map.k, imprs, pvals)), include.rownames=F)
+sink()
+```
+
+```{r}
+ndcg.k <- sapply(list(rel.k,cor.k,cre.k,all.k), function(d) d %>% subset(TID %in% tids & MEASURE == 'ndcg_cut_10') %>% select(-c(1:2)) %>% apply(2,mean))
+
+colnames(ndcg.k) <- c('Relevance','Correctness','Credibility','All')
+ndcg.k <- ndcg.k[c(2,4:7,3,1),]
+ndcg.k
+
+imprs <- round ( apply(ndcg.k, 2, function(x) x[-length(x)] / x[length(x)] - 1) * 100, 2 )
+```
+
+```{r}
+
+pvals <- sapply(list(rel.k,cor.k,cre.k,all.k), function(d) d %>% subset(TID %in% tids & MEASURE == 'ndcg_cut_10') %>% select(-c(1:2)) %>% calc_pval)
+
+colnames(pvals) <- c('Relevance','Correctness','Credibility','All')
+pvals <- round(pvals[c(2,4:7,3,1),],3)
+pvals
+
+# sink('~/Documents/UWaterlooThesis/clean_topics_ndcg_kfold.tex')
+print(xtable(printer(ndcg.k, imprs, pvals)), include.rownames=F)
+# sink()
+```
+
+
+
+
+## Analysis for 36 topics
+
+
+```{r}
+corCounts <- group_by(qrels, TID, COR, CRE) %>% summarise(ncor = n()) %>% subset(CRE==1 & COR==1)
+tids <- corCounts %>% subset(ncor>=1)
+tids <- tids$TID
+tids
+```
+
+```{r}
+library('xtable')
+# imprMat <- imprs
+# score   <- map
+put_stars <- function(pval) matrix(Reduce(paste0, lapply(c(.01,.05,.1), function(p) c(ifelse((pval <= p),'*','') ))), nrow(pval))
+
+printer <- function(score, imprMat, pvals){
+  pvals <- put_stars(pvals)
+  imprMat[imprMat>0] <- paste0('+',imprMat[imprMat>0])
+  res <- sapply(1:ncol(score), function(i) paste0(round(score[,i],3), pvals[,i], ' (' ,imprMat[,i], '%)'))
+  res[nrow(res),] <- round(score[nrow(score),],3)
+  res <- cbind(paste0(c(rep('UWatMDS_',nrow(res)-1), 'UwaterMDS_'), rownames(score)), res)
+  colnames(res) <- c('Run', colnames(score))
+  rownames(res) <- c()
+  res
+}
+
+calc_pval <- function(dat) {apply(dat,2, function(ser) t.test(x = ser, y = dat$BM25, paired = T)$p.value)}
+
+```
+
+```{r}
+ndcg <- sapply(list(rel,cor,cre,all), function(d) d %>% subset(TID %in% tids & MEASURE == 'ndcg_cut_10') %>% select(-c(1:3)) %>% apply(2,mean))
+
+colnames(ndcg) <- c('Relevance','Correctness','Credibility','All')
+ndcg <- ndcg[c(3,2,4:7,1),]
+ndcg
+
+imprs <- round ( apply(ndcg, 2, function(x) x[-length(x)] / x[length(x)] - 1) * 100, 2 )
+```
+
+```{r}
+pvals <- sapply(list(rel,cor,cre,all), function(d) d %>% subset(TID %in% tids & MEASURE == 'ndcg_cut_10') %>% select(-c(1:3)) %>% calc_pval)
+
+colnames(pvals) <- c('Relevance','Correctness','Credibility','All')
+pvals <- round(pvals[c(3,2,4:7,1),],3)
+pvals
+
+# sink('~/Documents/UWaterlooThesis/clean_topics_ndcg.tex')
+print(xtable(printer(ndcg, imprs, pvals)), include.rownames=F)
+# sink()
+```
+
+
+## Validation Results
+```{r}
+library('xtable')
+# imprMat <- imprs
+# score   <- map
+put_stars <- function(pval) matrix(Reduce(paste0, lapply(c(.01,.05,.1), function(p) c(ifelse((pval <= p),'*','') ))), nrow(pval))
+
+printer <- function(score, imprMat, pvals){
+  pvals <- put_stars(pvals)
+  imprMat[imprMat>0] <- paste0('+',imprMat[imprMat>0])
+  res <- sapply(1:ncol(score), function(i) paste0(round(score[,i],3), pvals[,i], ' (' ,imprMat[,i], '%)'))
+  res[nrow(res),] <- round(score[nrow(score),],3)
+  res <- cbind(paste0(c(rep('UWatMDS_',nrow(res)-1), 'UwaterMDS_'), rownames(score)), res)
+  colnames(res) <- c('Run', colnames(score))
+  rownames(res) <- c()
+  res
+}
+
+calc_pval <- function(dat) {apply(dat,2, function(ser) t.test(x = ser, y = dat$bm25, paired = T)$p.value)}
+
+```
+
+
+
+```{r}
+ndcg.k <- sapply(list(rel.k,cor.k,cre.k,all.k), function(d) d %>% subset(TID %in% tids & MEASURE == 'ndcg_cut_10') %>% select(-c(1:2)) %>% apply(2,mean))
+
+colnames(ndcg.k) <- c('Relevance','Correctness','Credibility','All')
+ndcg.k <- ndcg.k[c(2,4:7,3,1),]
+ndcg.k
+
+imprs <- round ( apply(ndcg.k, 2, function(x) x[-length(x)] / x[length(x)] - 1) * 100, 2 )
+```
+
+```{r}
+pvals <- sapply(list(rel.k,cor.k,cre.k,all.k), function(d) d %>% subset(TID %in% tids & MEASURE == 'ndcg_cut_10') %>% select(-c(1:2)) %>% calc_pval)
+
+colnames(pvals) <- c('Relevance','Correctness','Credibility','All')
+pvals <- round(pvals[c(2,4:7,3,1),],3)
+pvals
+
+# sink('~/Documents/UWaterlooThesis/clean_topics_ndcg_kfold.tex')
+print(xtable(printer(ndcg.k, imprs, pvals)), include.rownames=F)
+  # sink()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+# Analysis for All Topics
+```{r}
+library('xtable')
+# imprMat <- imprs
+# score   <- map
+put_stars <- function(pval) matrix(Reduce(paste0, lapply(c(.01,.05,.1), function(p) c(ifelse((pval < p),'*','') ))), nrow(pval))
+
+printer <- function(score, imprMat, pvals){
+  pvals <- put_stars(pvals)
+  imprMat[imprMat>0] <- paste0('+',imprMat[imprMat>0])
+  res <- sapply(1:ncol(score), function(i) paste0(round(score[,i],3), pvals[,i], ' (' ,imprMat[,i], '%)'))
+  res[nrow(res),] <- round(score[nrow(score),],3)
+  res <- cbind(paste0(c(rep('UWatMDS_',nrow(res)-1), 'UwaterMDS_'), rownames(score)), res)
+  colnames(res) <- c('Run', colnames(score))
+  rownames(res) <- c()
+  res
+}
+
+calc_pval <- function(dat) {apply(dat,2, function(ser) t.test(x = ser, y = dat$BM25, paired = T)$p.value)}
+
+```
+
+```{r}
+map <- sapply(list(rel,cor,cre,all), function(d) d %>% subset(MEASURE == 'map') %>% select(-c(1:3)) %>% apply(2,mean))
+colnames(map) <- c('Relevance','Correctness','Credibility','All')
+map <- map[c(3,2,4:7,1),]
+map
+
+imprs <- round ( apply(map, 2, function(x) x[-length(x)] / x[length(x)] - 1) * 100, 2 )
+
+```
+
+```{r}
+pvals <- sapply(list(rel,cor,cre,all), function(d) d %>% subset(MEASURE == 'map') %>% select(-c(1:3)) %>% calc_pval)
+
+colnames(pvals) <- c('Relevance','Correctness','Credibility','All')
+pvals <- pvals[c(3,2,4:7,1),]
+pvals
+
+# sink('~/Documents/UWaterlooThesis/clean_topics_map.tex')  
+print(xtable(printer(map, imprs, pvals)), include.rownames=F)
+# sink()
+```
+
+```{r}
+ndcg <- sapply(list(rel,cor,cre,all), function(d) d %>% subset(MEASURE == 'ndcg_cut_10') %>% select(-c(1:3)) %>% apply(2,mean))
+
+colnames(ndcg) <- c('Relevance','Correctness','Credibility','All')
+ndcg <- ndcg[c(3,2,4:7,1),]
+ndcg
+
+imprs <- round ( apply(ndcg, 2, function(x) x[-length(x)] / x[length(x)] - 1) * 100, 2 )
+```
+
+```{r}
+
+pvals <- sapply(list(rel,cor,cre,all), function(d) d %>% subset(MEASURE == 'ndcg_cut_10') %>% select(-c(1:3)) %>% calc_pval)
+
+colnames(pvals) <- c('Relevance','Correctness','Credibility','All')
+pvals <- pvals[c(3,2,4:7,1),]
+pvals
+
+# sink('~/Documents/UWaterlooThesis/clean_topics_ndcg.tex')
+print(xtable(printer(ndcg, imprs, pvals)), include.rownames=F)
+# sink()
+```
+
+
+## Validation Results
+```{r}
+library('xtable')
+# imprMat <- imprs
+# score   <- map
+put_stars <- function(pval) matrix(Reduce(paste0, lapply(c(.01,.05,.1), function(p) c(ifelse((pval <= p),'*','') ))), nrow(pval))
+
+printer <- function(score, imprMat, pvals){
+  pvals <- put_stars(pvals)
+  imprMat[imprMat>0] <- paste0('+',imprMat[imprMat>0])
+  res <- sapply(1:ncol(score), function(i) paste0(round(score[,i],3), pvals[,i], ' (' ,imprMat[,i], '%)'))
+  res[nrow(res),] <- round(score[nrow(score),],3)
+  res <- cbind(paste0(c(rep('UWatMDS_',nrow(res)-1), 'UwaterMDS_'), rownames(score)), res)
+  colnames(res) <- c('Run', colnames(score))
+  rownames(res) <- c()
+  res
+}
+
+calc_pval <- function(dat) {apply(dat,2, function(ser) t.test(x = ser, y = dat$bm25, paired = T)$p.value)}
+
+```
+
+
+```{r}
+map.k <- sapply(list(rel.k,cor.k,cre.k,all.k), function(d) d %>% subset(MEASURE == 'map') %>% select(-c(1:2)) %>% apply(2,mean))
+colnames(map.k) <- c('Relevance','Correctness','Credibility','All')
+map.k <- map.k[c(2,4:7,3,1),]
+map.k
+
+imprs <- round ( apply(map.k, 2, function(x) x[-length(x)] / x[length(x)] - 1) * 100, 2 )
+```
+
+```{r}
+pvals <- sapply(list(rel.k,cor.k,cre.k,all.k), function(d) d %>% subset(MEASURE == 'map') %>% select(-c(1:2)) %>% calc_pval)
+
+colnames(pvals) <- c('Relevance','Correctness','Credibility','All')
+pvals <- pvals[c(2,4:7,3,1),]
+pvals
+
+# sink('~/Documents/UWaterlooThesis/clean_topics_map_kfold.tex')
+print(xtable(printer(map.k, imprs, pvals)), include.rownames=F)
+# sink()
+```
+
+```{r}
+ndcg.k <- sapply(list(rel.k,cor.k,cre.k,all.k), function(d) d %>% subset(MEASURE == 'ndcg_cut_10') %>% select(-c(1:2)) %>% apply(2,mean))
+
+colnames(ndcg.k) <- c('Relevance','Correctness','Credibility','All')
+ndcg.k <- ndcg.k[c(2,4:7,3,1),]
+ndcg.k
+
+imprs <- round ( apply(ndcg.k, 2, function(x) x[-length(x)] / x[length(x)] - 1) * 100, 2 )
+```
+
+```{r}
+pvals <- sapply(list(rel.k,cor.k,cre.k,all.k), function(d) d %>% subset(MEASURE == 'ndcg_cut_10') %>% select(-c(1:2)) %>% calc_pval)
+
+colnames(pvals) <- c('Relevance','Correctness','Credibility','All')
+pvals <- round(pvals[c(2,4:7,3,1),],3)
+pvals
+
+# sink('~/Documents/UWaterlooThesis/clean_topics_ndcg_kfold.tex')
+print(xtable(printer(ndcg.k, imprs, pvals)), include.rownames=F)
+# sink()
+```
+
+## Classifier Accuracy
+```{r}
+DIR <- '~/Documents/DecisionRUN/trec/scores/cred_scores/'
+
+scores <- lapply(dir(DIR), function(d) read.csv(paste0(DIR, d))[,-1])
+scores <- do.call(rbind,scores)
+head(scores)
+
+qrels <- merge(qrels,scores, all.x = T )
+qrels <- na.omit(qrels)
+dim(qrels)
+
+qrels$CLASS <- apply(qrels[,c('NEG','NEU','POS')],1 , function(x) which(x==max(x)))
+qrels <- qrels[qrels$CLASS!=2,]
+dim(qrels)
+qrels$CLASS <- ifelse(qrels$CLASS == 3,1,0)
+
+table(qrels$CRE, qrels$CLASS)
+```
+
+```{r}
+mean(qrels$CRE == qrels$CLASS)
+```
+
+## Kfold Accuracy
+
+```{r}
+DIR <- '/home/ludwig/Documents/Credibility/scores/'
+
+scores <- lapply(dir(DIR), function(d) read.csv(paste0(DIR, d))[,-1])
+scores <- do.call(rbind,scores)
+head(scores)
+
+
+qrels <- merge(qrels,scores, all.x = T )
+dim(qrels)
+qrels <- na.omit(qrels)
+dim(qrels)
+
+table(qrels$CRE, qrels$PREDS)
+```
+
+```{r}
+mean(qrels$CRE == qrels$PREDS)
+```
+
+
+```{r}
+tenf <- read.csv('/home/ludwig/Documents/Credibility/10fold_groups.txt')
+colnames(tenf) <- c('GID','TID')
+qrels %>% merge(tenf) %>% group_by(GID) %>% summarize(acc = mean(CRE==PREDS))
+sd((qrels %>% merge(tenf) %>% group_by(GID) %>% summarize(acc = mean(CRE==PREDS)))$acc)
+
+qrels %>% merge(tenf) %>% subset(GID==6)
+```
+
+
